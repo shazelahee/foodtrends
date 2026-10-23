@@ -13,7 +13,7 @@ import streamlit as st
 
 # Read secrets only if provided. Never check secrets into source control.
 try:
-    for name in ("DATABASE_URL", "APP_PASSWORD", "BITE_WIKIMEDIA_CONTACT"):
+    for name in ("DATABASE_URL", "APP_PASSWORD", "BITE_WIKIMEDIA_CONTACT", "INSTAGRAM_ACCESS_TOKEN"):
         secret = st.secrets.get(name)
         if secret and not os.getenv(name):
             os.environ[name] = str(secret)
@@ -30,6 +30,7 @@ from bite_signals.db import (add_topic, get_articles, get_observations, get_refr
 from bite_signals.imports import (google_trends_preview, import_google_trends,
     import_social, social_preview)
 from bite_signals.sources import refresh_topic, refresh_one
+from bite_signals.instagram_api import profile as instagram_profile, media as instagram_media, InstagramError
 
 RED = "#E94B35"
 GREEN = "#173E34"
@@ -149,7 +150,7 @@ def sync_topic(topic, edition, force=False):
 
 st.sidebar.markdown("## 🍅 BITE SIGNALS")
 st.sidebar.caption("**FOOD CULTURE, WITH RECEIPTS.**")
-page = st.sidebar.radio("Navigate", ["Explore a trend", "Signals board", "Compare", "Import studio", "Data & sources"])
+page = st.sidebar.radio("Navigate", ["Explore a trend", "Signals board", "Compare", "Import studio", "Instagram (beta)", "Data & sources"])
 st.sidebar.divider()
 edition = st.sidebar.selectbox("News edition", ["United Kingdom", "Global (English)"])
 period_label = st.sidebar.selectbox("Chart time window", ["90 days", "30 days", "365 days", "All saved"])
@@ -158,7 +159,7 @@ st.sidebar.caption("UK / global selection affects the **news feed edition**, not
 st.sidebar.divider()
 st.sidebar.markdown("🟢 **Public RSS + Wikimedia** · configured")
 st.sidebar.markdown("🟡 **Google Trends + social** · CSV upload")
-st.sidebar.markdown("⚪ **Official social APIs** · not connected")
+st.sidebar.markdown("🟡 **Instagram (beta)** · read-only token test")
 st.sidebar.caption("Public source availability can change. Missing or failed data is shown explicitly.")
 
 st.markdown('''<div class="bite-masthead"><div class="bite-brand">BITE <span>SIGNALS</span> <span style="color:#E94B35">●</span></div>
@@ -463,6 +464,34 @@ elif page == "Import studio":
                            data="platform,topic,date,metric,value,unit,geo,source_url,notes,text\n",
                            file_name="social_industry_template.csv", mime="text/csv")
     st.info("Official Instagram / TikTok API connections are not enabled in this MVP; the CSV importer does **not** bypass those platforms. The source adapters can be expanded after permissions are granted.")
+
+elif page == "Instagram (beta)":
+    st.markdown("<div class='bite-strap'>05 / OWNED ACCOUNT ANALYTICS</div>", unsafe_allow_html=True)
+    st.title("Instagram · account test")
+    st.write("Read-only connection for your own authorised Instagram professional account. This is **not** a platform-wide hashtag search, automatic insights collector, or historical data archive.")
+    st.warning("Do not paste your access token into this page, GitHub, or a public form. Configure **INSTAGRAM_ACCESS_TOKEN** privately in Streamlit App settings → Secrets. Use APP_PASSWORD or a private deployment before using account data.")
+    token = os.getenv("INSTAGRAM_ACCESS_TOKEN", "").strip()
+    if not token:
+        st.info("Not connected yet. Add INSTAGRAM_ACCESS_TOKEN to Streamlit Secrets and reboot the app.")
+        st.code('INSTAGRAM_ACCESS_TOKEN = "YOUR_PRIVATE_TOKEN"', language="toml")
+        st.caption("Replace YOUR_PRIVATE_TOKEN only in Streamlit's private Secrets editor, not in GitHub.")
+    elif st.button("Test Instagram connection", type="primary"):
+        try:
+            p = instagram_profile(token)
+            st.success("Connected to Instagram. Verified username: @" + str(p.get("username", "unknown")))
+            st.write("Account type:", p.get("account_type", "not returned"))
+            posts = instagram_media(token)
+            st.write(f"Returned {len(posts)} recent media items (up to 25).")
+            if posts:
+                table = pd.DataFrame(posts)
+                allowed = [col for col in ("timestamp", "media_type", "caption", "like_count", "comments_count", "permalink") if col in table.columns]
+                st.dataframe(table[allowed], hide_index=True, use_container_width=True)
+            else:
+                st.info("No media returned. This can be normal for a new account.")
+            st.caption("Counts are point-in-time API values and may be unavailable. They are not saved automatically in this beta.")
+        except InstagramError as exc:
+            st.error(str(exc))
+    st.caption("Official Instagram Login API. A test token may expire; long-term automation needs secure OAuth and refresh handling. Scope: authorised account only.")
 
 elif page == "Data & sources":
     st.markdown("<div class='bite-strap'>05 / THE RECEIPT ARCHIVE</div>", unsafe_allow_html=True)

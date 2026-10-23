@@ -31,6 +31,7 @@ from bite_signals.imports import (google_trends_preview, import_google_trends,
     import_social, social_preview)
 from bite_signals.sources import refresh_topic, refresh_one
 from bite_signals.instagram_api import profile as instagram_profile, media as instagram_media, InstagramError
+from bite_signals.instagram_history import capture as capture_instagram, history as instagram_history
 
 RED = "#E94B35"
 GREEN = "#173E34"
@@ -467,31 +468,47 @@ elif page == "Import studio":
 
 elif page == "Instagram (beta)":
     st.markdown("<div class='bite-strap'>05 / OWNED ACCOUNT ANALYTICS</div>", unsafe_allow_html=True)
-    st.title("Instagram · account test")
-    st.write("Read-only connection for your own authorised Instagram professional account. This is **not** a platform-wide hashtag search, automatic insights collector, or historical data archive.")
-    st.warning("Do not paste your access token into this page, GitHub, or a public form. Configure **INSTAGRAM_ACCESS_TOKEN** privately in Streamlit App settings → Secrets. Use APP_PASSWORD or a private deployment before using account data.")
+    st.title("Instagram · your account analytics")
+    st.caption("Official Instagram Login: authorised account only. Likes and comments are snapshots, not reach or platform-wide trend activity.")
+    st.warning("Never paste a token into this page. Keep INSTAGRAM_ACCESS_TOKEN in Streamlit Secrets. Protect account analytics with APP_PASSWORD or private app access.")
     token = os.getenv("INSTAGRAM_ACCESS_TOKEN", "").strip()
     if not token:
-        st.info("Not connected yet. Add INSTAGRAM_ACCESS_TOKEN to Streamlit Secrets and reboot the app.")
-        st.code('INSTAGRAM_ACCESS_TOKEN = "YOUR_PRIVATE_TOKEN"', language="toml")
-        st.caption("Replace YOUR_PRIVATE_TOKEN only in Streamlit's private Secrets editor, not in GitHub.")
-    elif st.button("Test Instagram connection", type="primary"):
-        try:
-            p = instagram_profile(token)
-            st.success("Connected to Instagram. Verified username: @" + str(p.get("username", "unknown")))
-            st.write("Account type:", p.get("account_type", "not returned"))
-            posts = instagram_media(token)
-            st.write(f"Returned {len(posts)} recent media items (up to 25).")
-            if posts:
-                table = pd.DataFrame(posts)
-                allowed = [col for col in ("timestamp", "media_type", "caption", "like_count", "comments_count", "permalink") if col in table.columns]
-                st.dataframe(table[allowed], hide_index=True, use_container_width=True)
-            else:
-                st.info("No media returned. This can be normal for a new account.")
-            st.caption("Counts are point-in-time API values and may be unavailable. They are not saved automatically in this beta.")
-        except InstagramError as exc:
-            st.error(str(exc))
-    st.caption("Official Instagram Login API. A test token may expire; long-term automation needs secure OAuth and refresh handling. Scope: authorised account only.")
+        st.info("Add INSTAGRAM_ACCESS_TOKEN in Streamlit app Settings → Secrets.")
+    else:
+        if st.button("Refresh Instagram analytics", type="primary"):
+            try:
+                result = capture_instagram(token, engine)
+                st.success(f"Saved {result['posts']} post snapshots for @{result['username']} at {result['captured_at']} (UTC).")
+            except (InstagramError, ValueError) as exc:
+                st.error(str(exc))
+            except Exception:
+                st.error("Could not save Instagram results. Check that your database is writable and the API token is valid.")
+    try:
+        history = instagram_history(engine)
+        if history.empty:
+            st.info("No saved Instagram snapshots yet. Select Refresh Instagram analytics above.")
+        else:
+            usernames = sorted(history.username.unique().tolist())
+            selected = st.selectbox("Account", usernames)
+            filtered = history[history.username == selected].copy()
+            st.metric("Saved post snapshots", len(filtered))
+            st.metric("Distinct posts", filtered.media_id.nunique())
+            st.caption("Counts show the numbers returned by Instagram when captured. Missing counts remain blank rather than zero.")
+            st.dataframe(filtered[["captured_at","posted_at","media_type","likes","comments","permalink","caption"]],
+                         hide_index=True, use_container_width=True)
+            metric = st.selectbox("Metric over time", ["likes", "comments"])
+            graph = filtered.dropna(subset=[metric]).copy()
+            if not graph.empty:
+                graph["post"] = graph["media_id"].str[-8:]
+                st.plotly_chart(px.line(graph.sort_values("captured_at"), x="captured_at", y=metric,
+                                        color="post", markers=True,
+                                        labels={"captured_at":"Snapshot date (UTC)",metric:metric.title(),"post":"Post ID suffix"}),
+                                use_container_width=True)
+            st.download_button("Download saved Instagram snapshots (CSV)", filtered.to_csv(index=False).encode(),
+                               file_name="instagram_snapshots.csv", mime="text/csv")
+    except Exception:
+        st.error("Instagram history could not load. Check database configuration.")
+    st.caption("To preserve historical data across cloud restarts, set DATABASE_URL to persistent PostgreSQL. For scheduled updates, see INSTAGRAM_AUTOMATION.md.")
 
 elif page == "Data & sources":
     st.markdown("<div class='bite-strap'>05 / THE RECEIPT ARCHIVE</div>", unsafe_allow_html=True)
